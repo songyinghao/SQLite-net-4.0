@@ -30,6 +30,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 #endif
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 using System.Linq;
 using System.Linq.Expressions;
@@ -231,7 +232,27 @@ namespace SQLite
         /// the storeDateTimeAsTicks parameter.
         /// </param>
         public SQLiteConnection(string databasePath, bool storeDateTimeAsTicks = true)
-            : this(databasePath, SQLiteOpenFlags.ReadWrite | SQLiteOpenFlags.Create, storeDateTimeAsTicks)
+            : this(databasePath, null, storeDateTimeAsTicks)
+        {
+        }
+
+        /// <summary>
+        /// Constructs a new SQLiteConnection and opens a SQLite database specified by databasePath.
+        /// </summary>
+        /// <param name="databasePath">
+        /// Specifies the path to the database file.
+        /// </param>
+        /// <param name="password">Specifies the password of the database</param>
+        /// <param name="storeDateTimeAsTicks">
+        /// Specifies whether to store DateTime properties as ticks (true) or strings (false). You
+        /// absolutely do want to store them as Ticks in all new projects. The value of false is
+        /// only here for backwards compatibility. There is a *significant* speed advantage, with no
+        /// down sides, when setting storeDateTimeAsTicks = true.
+        /// If you use DateTimeOffset properties, it will be always stored as ticks regardingless
+        /// the storeDateTimeAsTicks parameter.
+        /// </param>
+        public SQLiteConnection(string databasePath, string password=null, bool storeDateTimeAsTicks = true)
+            : this(databasePath, SQLiteOpenFlags.ReadWrite | SQLiteOpenFlags.Create, password, storeDateTimeAsTicks)
         {
         }
 
@@ -244,6 +265,7 @@ namespace SQLite
         /// <param name="openFlags">
         /// Flags controlling how the connection should be opened.
         /// </param>
+        /// <param name="password">Specifies the password of the database</param>
         /// <param name="storeDateTimeAsTicks">
         /// Specifies whether to store DateTime properties as ticks (true) or strings (false). You
         /// absolutely do want to store them as Ticks in all new projects. The value of false is
@@ -252,7 +274,7 @@ namespace SQLite
         /// If you use DateTimeOffset properties, it will be always stored as ticks regardingless
         /// the storeDateTimeAsTicks parameter.
         /// </param>
-        public SQLiteConnection(string databasePath, SQLiteOpenFlags openFlags, bool storeDateTimeAsTicks = true)
+        public SQLiteConnection(string databasePath, SQLiteOpenFlags openFlags, string password = null, bool storeDateTimeAsTicks = true)
         {
             if (databasePath == null)
                 throw new ArgumentException("Must be specified", nameof(databasePath));
@@ -285,7 +307,13 @@ namespace SQLite
             _open = true;
 
             StoreDateTimeAsTicks = storeDateTimeAsTicks;
-
+            if (!string.IsNullOrWhiteSpace(password))
+            {
+                // add password
+                // reference:http://www.bricelam.net/2016/06/13/sqlite-encryption.html
+                var quotedPassword = ExecuteScalar<string>("SELECT quote($password);", password);
+                ExecuteScalar<object>("PRAGMA key=" + quotedPassword);
+            }
             BusyTimeout = TimeSpan.FromSeconds(0.1);
             if (openFlags.HasFlag(SQLiteOpenFlags.ReadWrite))
             {
@@ -3962,6 +3990,9 @@ namespace SQLite
 
     public static class SQLite3
     {
+        // https://system.data.sqlite.org/
+        private const string LibraryPath = "SQLite.Interop.dll";
+
         public enum Result : int
         {
             OK = 0,
@@ -4054,7 +4085,30 @@ namespace SQLite
             Serialized = 3
         }
 
-        const string LibraryPath = "sqlite3";
+        static SQLite3()
+        {
+            string hostAssemblyPath = new Uri(typeof(SQLite3).Assembly.CodeBase).LocalPath;
+            string hostAssemblyFolder = Path.GetDirectoryName(hostAssemblyPath);
+
+            string interopDllPath = string.Empty;
+
+            if (IntPtr.Size == 8)
+            {
+                interopDllPath = string.Format("{0}\\{1}\\{2}", hostAssemblyFolder, "x64", LibraryPath);
+            }
+            else
+            {
+                interopDllPath = string.Format("{0}\\{1}\\{2}", hostAssemblyFolder, "x86", LibraryPath);
+            }
+            if (!File.Exists(interopDllPath))
+            {
+                interopDllPath = Path.Combine(hostAssemblyFolder, LibraryPath);
+            }
+            LoadLibrary(interopDllPath);
+        }
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LoadLibrary(string dllToLoad);
 
 #if !USE_CSHARP_SQLITE && !USE_WP8_NATIVE_SQLITE && !USE_SQLITEPCL_RAW
         [DllImport(LibraryPath, EntryPoint = "sqlite3_threadsafe", CallingConvention = CallingConvention.Cdecl)]
